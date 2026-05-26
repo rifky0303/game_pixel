@@ -595,9 +595,33 @@ const GRASS_TUFTS = [
   { x: 12, y: 85 }, { x: 8, y: 24 }, { x: 82, y: 12 }, { x: 4, y: 90 }
 ];
 
+const FISH_TYPES = {
+  water_dragon: { id: 'water_dragon', name: 'Naga Air Harmoni 🐉 (Legendaris)', description: 'Naga mistis pelindung Danau Harmoni. Memiliki sisik emas berkilau magis.', sellPrice: 175, color: '#f59e0b', weight: '3.5 kg' },
+  golden_koi: { id: 'golden_koi', name: 'Mas Koki Emas 🐠 (Langka)', description: 'Ikan hias pembawa keberuntungan dengan sirip merah keemasan indah.', sellPrice: 65, color: '#f97316', weight: '1.2 kg' },
+  mountain_carp: { id: 'mountain_carp', name: 'Ikan Gurame Gunung 🐟', description: 'Gurame segar berukuran sedang jago berenang melawan arus dingin pegunungan.', sellPrice: 38, color: '#64748b', weight: '0.8 kg' },
+  tilapia: { id: 'tilapia', name: 'Mujair Danau Lincah 🐟', description: 'Ikan air tawar bertenaga tangguh yang lincah dan berlimpah di perdesaan.', sellPrice: 20, color: '#cbd5e1', weight: '0.4 kg' },
+  old_boot: { id: 'old_boot', name: 'Sepatu Bot Kuno Luar 🥾', description: 'Sepatu kulit usang dari dasaran danau. Sedikit berlumut namun bernilai antik.', sellPrice: 5, color: '#78350f', weight: '0.9 kg' }
+};
+
 export default function App() {
   // Game States
   const [coins, setCoins] = useState<number>(100);
+  
+  // ==========================================
+  // RETRO FISHING MINIGAME STATES
+  // ==========================================
+  const [fishingState, setFishingState] = useState<'idle' | 'casting' | 'waiting' | 'strike' | 'reeling' | 'caught' | 'escaped'>('idle');
+  const [fishInventory, setFishInventory] = useState<Record<string, number>>({
+    water_dragon: 0,
+    golden_koi: 0,
+    mountain_carp: 0,
+    tilapia: 0,
+    old_boot: 0
+  });
+  const [sweepValue, setSweepValue] = useState<number>(0);
+  const [sweepDirection, setSweepDirection] = useState<'up' | 'down'>('up');
+  const [targetFishId, setTargetFishId] = useState<keyof typeof FISH_TYPES>('tilapia');
+  const [biteTimer, setBiteTimer] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'kebun' | 'shop' | 'tasks' | 'help'>('kebun');
   const [crops, setCrops] = useState<Record<number, Crop>>({});
   const [selectedTool, setSelectedTool] = useState<GameState['selectedTool']>('walk');
@@ -659,6 +683,156 @@ export default function App() {
   // Show a banner notification helper
   const triggerNotification = (msg: string) => {
     setNotification(msg);
+  };
+
+  // ==========================================
+  // RETRO FISHING SYSTEM FUNCTIONS & EFFECTS
+  // ==========================================
+  
+  // Cleanup timer for fish bite
+  useEffect(() => {
+    return () => {
+      if (biteTimer) clearTimeout(biteTimer);
+    };
+  }, [biteTimer]);
+
+  // Strike timeout: if player doesn't react, fish escapes
+  useEffect(() => {
+    if (fishingState !== 'strike') return;
+
+    const timer = setTimeout(() => {
+      setFishingState('escaped');
+      triggerNotification("Sayang sekali! Ikannya keburu kenyang dan melarikan diri.");
+    }, 1500); // 1.5 seconds reaction window
+
+    return () => clearTimeout(timer);
+  }, [fishingState]);
+
+  // Reeling sweep animation ticker (smooth 60fps gauge)
+  useEffect(() => {
+    if (fishingState !== 'reeling') return;
+
+    const interval = setInterval(() => {
+      setSweepValue((prev) => {
+        let next = prev + (sweepDirection === 'up' ? 5 : -5);
+        if (next >= 100) {
+          setSweepDirection('down');
+          return 100;
+        }
+        if (next <= 0) {
+          setSweepDirection('up');
+          return 0;
+        }
+        return next;
+      });
+    }, 16);
+
+    return () => clearInterval(interval);
+  }, [fishingState, sweepDirection]);
+
+  // Keydown listener specifically for fishing
+  useEffect(() => {
+    if (fishingState === 'idle') return;
+
+    const handleFishingKey = (e: KeyboardEvent) => {
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        if (fishingState === 'strike') {
+          setFishingState('reeling');
+          setSweepValue(0);
+          setSweepDirection('up');
+        } else if (fishingState === 'reeling') {
+          handlePullRod();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleFishingKey);
+    return () => {
+      window.removeEventListener('keydown', handleFishingKey);
+    };
+  }, [fishingState, sweepValue, targetFishId, isMuted]);
+
+  // CASTING trigger: walking near pond, casting line
+  const startFishing = (e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    if (fishingState !== 'idle') return;
+    setActiveNPC(null);
+
+    // Character walks over to the wooden pier (aligned right next to pond)
+    setPlayerPos({ x: 26, y: 76 });
+    setPlayerDir('left'); // Looks toward the pond!
+
+    // Set target fish immediately!
+    const roll = Math.random() * 100;
+    let selectedFish: keyof typeof FISH_TYPES = 'tilapia';
+    if (roll < 1.5) {
+      selectedFish = 'water_dragon';
+    } else if (roll < 16.5) {
+      selectedFish = 'golden_koi';
+    } else if (roll < 46.5) {
+      selectedFish = 'mountain_carp';
+    } else if (roll < 86.5) {
+      selectedFish = 'tilapia';
+    } else {
+      selectedFish = 'old_boot';
+    }
+    setTargetFishId(selectedFish);
+
+    setFishingState('casting');
+    if (!isMuted) sound.playWater();
+    triggerNotification("Melempar joran pancing ke tengah kolam/danau...");
+
+    // Delay 1.5 - 3.5 seconds to strike bait
+    const waitTime = 1500 + Math.random() * 2000;
+    const timer = setTimeout(() => {
+      setFishingState('strike');
+      if (!isMuted) sound.playTextBeep(); // distinct sound trigger
+      triggerNotification("💥 STRIKE! Cepet Tekan [SPASI] atau Klik tombol TARIK!");
+    }, waitTime);
+
+    setBiteTimer(timer);
+  };
+
+  // REELING check: evaluating sweet spot
+  const handlePullRod = () => {
+    if (fishingState !== 'reeling') return;
+
+    const fish = FISH_TYPES[targetFishId];
+    // Set sweet zone boundaries
+    let min = 35;
+    let max = 65;
+    if (targetFishId === 'water_dragon') { min = 45; max = 55; }
+    else if (targetFishId === 'golden_koi') { min = 40; max = 60; }
+    else if (targetFishId === 'mountain_carp') { min = 36; max = 64; }
+    else if (targetFishId === 'tilapia') { min = 32; max = 68; }
+    else if (targetFishId === 'old_boot') { min = 25; max = 75; }
+
+    if (sweepValue >= min && sweepValue <= max) {
+      // Success catch!
+      setFishingState('caught');
+      setFishInventory(prev => ({
+        ...prev,
+        [targetFishId]: (prev[targetFishId] || 0) + 1
+      }));
+      grantXP(30);
+      
+      // Update tasks if there is a general earn task or similar
+      if (tasks.some(t => t.type === 'earn')) {
+        setCoins(prev => prev + fish.sellPrice);
+        if (!isMuted) sound.playLevelUp();
+        triggerNotification(`🎉 HEBAT! Menangkap ${fish.name}! Koin dikreditkan +${fish.sellPrice}.`);
+      } else {
+        if (!isMuted) sound.playLevelUp(); // majestic chime
+        triggerNotification(`🎉 HEBAT! Menangkap ${fish.name}! Cek kantong tas ranselmu.`);
+      }
+    } else {
+      // Defeat! Escaped
+      setFishingState('escaped');
+      if (!isMuted) sound.playHoe(); // low dump thud
+      triggerNotification(`Ah! Tarikan terlalu lambat/cepat, ${fish.name} meloncat kabur!`);
+    }
   };
 
   // Sound Controller listener
@@ -778,8 +952,8 @@ export default function App() {
   // Handle Keyboard walking movements inside the farm playground area
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Block keyboard inputs if user is currently typcasting dialog
-      if (activeNPC) return;
+      // Block keyboard inputs if user is currently typcasting dialog or fishing
+      if (activeNPC || fishingState !== 'idle') return;
 
       const step = 2.5; // percentage step size
       let dx = 0;
@@ -828,11 +1002,11 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [playerDir, activeNPC]);
+  }, [playerDir, activeNPC, fishingState]);
 
   // Click destination walk handler (Clicking terrain makes character travel)
   const handleTerrainClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (activeNPC) return; // ignore during dialog
+    if (activeNPC || fishingState !== 'idle') return; // ignore during dialog or fishing
 
     const rect = e.currentTarget.getBoundingClientRect();
     const clickX = ((e.clientX - rect.left) / rect.width) * 100;
@@ -1134,6 +1308,27 @@ export default function App() {
     triggerNotification(`Berhasil menjual ${info.name} seharga +${info.sellPrice} koin emas!`);
   };
 
+  // Selling caught pond fish
+  const sellFish = (fishId: string) => {
+    const owned = fishInventory[fishId] || 0;
+    if (owned <= 0) {
+      triggerNotification(`Kamu tidak memiliki ikan tersebut untuk dijual.`);
+      return;
+    }
+
+    const fish = FISH_TYPES[fishId as keyof typeof FISH_TYPES];
+    if (!fish) return;
+
+    setFishInventory(prev => ({
+      ...prev,
+      [fishId]: owned - 1
+    }));
+
+    setCoins(prev => prev + fish.sellPrice);
+    if (!isMuted) sound.playCoin();
+    triggerNotification(`Berhasil menjual 1x ${fish.name} senilai +${fish.sellPrice} koin emas!`);
+  };
+
   // NPC dialogue initiator
   const talkToNPC = (npc: NPC) => {
     // Move character near the NPC
@@ -1199,6 +1394,53 @@ export default function App() {
 
   return (
     <div id="game-container" className="min-h-screen bg-[#0f172a] text-[#f8fafc] font-mono flex flex-col justify-between overflow-x-hidden antialiased">
+      <style>{`
+        @keyframes sakura-fall {
+          0% {
+            transform: translate(0, -10px) rotate(0deg);
+            opacity: 0;
+          }
+          10% {
+            opacity: 1;
+          }
+          90% {
+            opacity: 1;
+          }
+          100% {
+            transform: translate(120px, 320px) rotate(360deg);
+            opacity: 0;
+          }
+        }
+        @keyframes firefly-glow {
+          0%, 100% {
+            transform: translate(0, 0) scale(0.6);
+            opacity: 0.1;
+          }
+          50% {
+            transform: translate(15px, -20px) scale(1.1);
+            opacity: 0.9;
+          }
+        }
+        @keyframes custom-ripple {
+          0% {
+            transform: scale(0.4);
+            opacity: 1;
+          }
+          100% {
+            transform: scale(2.2);
+            opacity: 0;
+          }
+        }
+        .anim-sakura {
+          animation: sakura-fall 12s linear infinite;
+        }
+        .anim-firefly {
+          animation: firefly-glow 5s ease-in-out infinite;
+        }
+        .anim-ripple {
+          animation: custom-ripple 1.8s ease-out infinite;
+        }
+      `}</style>
       
       {/* HEADER HUD BAR */}
       <header id="game-hud" className="bg-[#1e293b] border-b-4 border-[#334155] p-3 px-4 flex flex-wrap justify-between items-center gap-3 z-20 sticky top-0">
@@ -1414,6 +1656,47 @@ export default function App() {
               </div>
             )}
 
+            {/* WIND-BLOWN SAKURA PETALS IN THE BREEZE */}
+            {weather === 'cerah' && (
+              <div className="absolute inset-0 pointer-events-none overflow-hidden z-10 opacity-75">
+                {[...Array(8)].map((_, i) => (
+                  <div 
+                    key={`sakura-petal-${i}`}
+                    className="absolute bg-pink-300 rounded-full anim-sakura"
+                    style={{
+                      width: `${4 + (i % 3)}px`,
+                      height: `${6 + (i % 2)}px`,
+                      left: `${10 + (i * 12)}%`,
+                      top: `${-10 - (i * 5)}%`,
+                      animationDelay: `${i * 1.5}s`,
+                      animationDuration: `${10 + (i * 2)}s`,
+                      opacity: 0.8
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+
+            {/* GLOWING FIREFLIES IN NIGHTTIME */}
+            {timeOfDay === 'malam' && (
+              <div className="absolute inset-0 pointer-events-none overflow-hidden z-10 opacity-90">
+                {[...Array(6)].map((_, i) => (
+                  <div 
+                    key={`firefly-${i}`}
+                    className="absolute bg-lime-400 rounded-full filter blur-[1px] shadow-[0_0_6px_#84cc16] anim-firefly"
+                    style={{
+                      width: '4px',
+                      height: '4px',
+                      left: `${15 + (i * 15)}%`,
+                      top: `${35 + (i * 10)}%`,
+                      animationDelay: `${i * 0.8}s`,
+                      animationDuration: `${3.5 + (i % 3)}s`
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+
             {/* SCENERY BACKGROUND ASSETS */}
             {/* Distant Hills Ranges */}
             <div className="absolute top-0 inset-x-0 h-1/5 bg-[#122b07] clip-path-hills opacity-75 z-0" />
@@ -1516,7 +1799,11 @@ export default function App() {
             </div>
 
             {/* Tranquil Lake / Pond (rendered on bottom-left) */}
-            <div className="absolute left-[4%] bottom-[4%] w-[21%] h-[18%] bg-sky-700 rounded-full border-4 border-[#1b3c0a] flex items-center justify-center overflow-hidden">
+            <div 
+              onClick={startFishing}
+              className="absolute left-[4%] bottom-[4%] w-[21%] h-[18%] bg-sky-700 rounded-full border-4 border-[#1b3c0a] flex items-center justify-center overflow-hidden cursor-pointer hover:border-sky-300 hover:scale-[1.02] active:scale-95 transition-all group z-10 animate-pulse-slow"
+              title="Klik Danau/Dermaga untuk Memancing!"
+            >
               <div className="absolute inset-1 bg-sky-600 rounded-full opacity-90 animate-pulse" />
               {/* Water lily plants circles decoration */}
               <circle cx="20" cy="15" r="3" fill="#15803d" className="absolute left-6 top-4" />
@@ -1533,6 +1820,13 @@ export default function App() {
               <div className="absolute right-0 top-[35%] w-8 h-4 bg-amber-800 rounded-l border border-amber-950 flex flex-col justify-between p-[2px]">
                 <div className="w-full h-[1px] bg-amber-950" />
                 <div className="w-full h-[1px] bg-amber-950" />
+              </div>
+
+              {/* Hover indicator overlay */}
+              <div id="fishing-hover-badge" className="absolute inset-0 bg-sky-950/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                <span className="text-[9px] font-black text-white bg-slate-900/95 py-0.5 px-2 rounded-md border border-sky-400 animate-bounce shadow-xl uppercase tracking-wider">
+                  🎣 Pancing!
+                </span>
               </div>
             </div>
 
@@ -1617,6 +1911,220 @@ export default function App() {
                 );
               })}
             </div>
+
+            {/* INTERACTIVE FISHING BOBBER & SPLASH ON THE LAKE */}
+            {(fishingState === 'casting' || fishingState === 'waiting' || fishingState === 'strike' || fishingState === 'reeling') && (
+              <div 
+                className="absolute left-[13%] bottom-[12%] w-[2.5%] aspect-square z-20 pointer-events-none flex items-center justify-center anim-ripple duration-1000"
+                style={{ animationDuration: '2.5s' }}
+              >
+                {/* Ripple */}
+                <div className="absolute w-6 h-2 border border-sky-300 rounded-full animate-ping opacity-75" />
+                {/* Bobber Core */}
+                <div className="w-3 h-3 bg-red-500 rounded-full relative border border-white flex flex-col justify-between overflow-hidden shadow-md animate-bounce">
+                  <div className="w-full h-1/2 bg-red-600" />
+                  <div className="w-full h-1/2 bg-white" />
+                </div>
+                {/* EXCLAMATION OF STRIKE */}
+                {fishingState === 'strike' && (
+                  <div className="absolute -top-7 bg-red-600 text-white font-black text-[9px] px-1.5 py-0.5 rounded border border-yellow-300 flex items-center justify-center animate-bounce shadow-xl scale-110">
+                    💥 !! STRIKE !! 💥
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* CENTRAL FISHING HUD OVERLAY STATION */}
+            {fishingState !== 'idle' && (
+              <div 
+                className="absolute left-[32%] top-[20%] w-[42%] h-[72%] bg-slate-950/95 border-4 border-sky-600 rounded-xl z-30 p-3.5 flex flex-col justify-between text-white shadow-2xl animate-fade-in"
+                onClick={(e) => e.stopPropagation() /* block clicks on terrain */}
+              >
+                {/* Header */}
+                <div className="flex justify-between items-center border-b border-sky-900 pb-1.5">
+                  <div className="flex items-center gap-1 text-sky-400 font-extrabold text-[10px] uppercase tracking-wider">
+                    <span>🎣 Danau Kebun Harmoni</span>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      setFishingState('idle');
+                      if (biteTimer) clearTimeout(biteTimer);
+                    }}
+                    className="text-[8px] bg-red-950 hover:bg-red-900 text-red-200 px-1.5 py-0.5 rounded border border-red-800 transition-colors font-bold uppercase cursor-pointer"
+                  >
+                    Batal
+                  </button>
+                </div>
+
+                {/* Body depending on state */}
+                {fishingState === 'casting' && (
+                  <div className="flex-1 flex flex-col items-center justify-center text-center gap-2.5 p-1">
+                    <div className="relative">
+                      <div className="w-8 h-8 rounded-full border-4 border-sky-700 border-t-sky-300 animate-spin" />
+                      <div className="absolute inset-0 flex items-center justify-center text-[10px]">🌊</div>
+                    </div>
+                    <div>
+                      <h4 className="text-[10px] font-black text-sky-300 animate-pulse uppercase tracking-wider">Melempar Kail Pancing...</h4>
+                      <p className="text-[8px] text-slate-400 max-w-[150px] mx-auto mt-0.5 leading-normal">Umpan telah melayang jauh ke tengah permukaan air danau yang tenang.</p>
+                    </div>
+                  </div>
+                )}
+
+                {fishingState === 'waiting' && (
+                  <div className="flex-1 flex flex-col items-center justify-center text-center gap-2 p-1">
+                    <div className="flex gap-1.5 items-center justify-center p-1">
+                      <span className="w-2 h-2 bg-sky-400 rounded-full animate-ping" />
+                      <span className="w-1.5 h-1.5 bg-sky-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+                      <span className="w-1.5 h-1.5 bg-sky-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
+                    </div>
+                    <div>
+                      <h4 className="text-[10px] font-bold text-slate-300 uppercase tracking-wide">Menunggu Reaksi Ikan...</h4>
+                      <p className="text-[8px] text-slate-400 max-w-[150px] mx-auto mt-0.5 leading-normal">Fokus mengamati pergerakan air. Bersiaplah mengklik tombol TARIK saat strike terjadi!</p>
+                    </div>
+                  </div>
+                )}
+
+                {fishingState === 'strike' && (
+                  <div className="flex-1 flex flex-col items-center justify-center text-center gap-2 p-1 bg-sky-950/20 rounded-lg border border-sky-800/35">
+                    <span className="text-xl animate-bounce">🌊🎣</span>
+                    <div>
+                      <h4 className="text-[11px] font-black text-rose-400 uppercase tracking-widest animate-pulse">!! STRIKE !!</h4>
+                      <p className="text-[8px] text-yellow-300 font-bold mt-0.5 leading-normal">IKAN MENYANTAP UMPAN!</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setFishingState('reeling');
+                        setSweepValue(0);
+                        setSweepDirection('up');
+                      }}
+                      className="w-full py-1 bg-yellow-500 hover:bg-yellow-400 text-slate-950 font-black text-[10px] rounded border border-yellow-300 active:scale-95 transition-transform uppercase tracking-wider cursor-pointer"
+                    >
+                      🎣 Gulung Senar!
+                    </button>
+                    <p className="text-[7px] text-slate-500 font-semibold italic">Atau tekan [TOMBOL SPASI / ENTER]</p>
+                  </div>
+                )}
+
+                {fishingState === 'reeling' && (
+                  <div className="flex-1 flex flex-col justify-between items-center p-1">
+                    <div className="w-full text-center">
+                      <p className="text-[9px] font-extrabold text-sky-400">TARIK ULUR SENAR PANCING!</p>
+                      <p className="text-[7.5px] text-slate-400 mt-0.5 leading-snug">Petunjuk: Hentikan jarum tepat di tengah Area Aman Hijau!</p>
+                    </div>
+
+                    {/* Progress Bar Gauge with Needle */}
+                    <div className="w-full py-1.5">
+                      <div className="relative w-full h-4 bg-slate-900 rounded border border-slate-800 overflow-hidden flex items-center justify-center">
+                        {/* Target Zones depending on rarity */}
+                        {targetFishId === 'water_dragon' && <div className="absolute left-[45%] w-[10%] h-full bg-emerald-500 border-l border-r border-emerald-400" />}
+                        {targetFishId === 'golden_koi' && <div className="absolute left-[40%] w-[20%] h-full bg-emerald-500 border-l border-r border-emerald-400" />}
+                        {targetFishId === 'mountain_carp' && <div className="absolute left-[36%] w-[28%] h-full bg-emerald-500 border-l border-r border-emerald-400" />}
+                        {targetFishId === 'tilapia' && <div className="absolute left-[32%] w-[36%] h-full bg-emerald-400 border-l border-r border-emerald-300" />}
+                        {targetFishId === 'old_boot' && <div className="absolute left-[25%] w-[50%] h-full bg-emerald-400 border-l border-r border-emerald-300" />}
+
+                        {/* Yellow warning margin borders */}
+                        {targetFishId === 'water_dragon' && (
+                          <>
+                            <div className="absolute left-[40%] w-[5%] h-full bg-yellow-500/15" />
+                            <div className="absolute left-[55%] w-[5%] h-full bg-yellow-500/15" />
+                          </>
+                        )}
+                        {targetFishId === 'golden_koi' && (
+                          <>
+                            <div className="absolute left-[35%] w-[5%] h-full bg-yellow-500/15" />
+                            <div className="absolute left-[60%] w-[5%] h-full bg-yellow-500/15" />
+                          </>
+                        )}
+                        {targetFishId === 'mountain_carp' && (
+                          <>
+                            <div className="absolute left-[30%] w-[6%] h-full bg-yellow-500/15" />
+                            <div className="absolute left-[64%] w-[6%] h-full bg-yellow-500/15" />
+                          </>
+                        )}
+
+                        <span className="absolute text-[7px] text-slate-400 font-extrabold tracking-widest pointer-events-none select-none">ZONA AMAN</span>
+
+                        {/* Moving needle line indicator */}
+                        <div 
+                          className="absolute w-1 h-full bg-red-500 border-r border-l border-black shadow"
+                          style={{ left: `${sweepValue}%`, transform: 'translateX(-50%)' }}
+                        />
+                      </div>
+
+                      {/* Info display text below bar */}
+                      <div className="flex justify-between items-center text-[7px] text-slate-400 mt-1">
+                        <span>Min</span>
+                        <span className="text-yellow-400 uppercase font-extrabold text-center">
+                          {targetFishId === 'water_dragon' && '🐉 Naga Air (SANGAT LIAR!)'}
+                          {targetFishId === 'golden_koi' && '🐠 Koi Emas (Lumpat Gesit!)'}
+                          {targetFishId === 'mountain_carp' && '🐟 Gurame Gunung'}
+                          {targetFishId === 'tilapia' && '🐟 Mujair Danau'}
+                          {targetFishId === 'old_boot' && '🥾 Sepatu Bot Usang'}
+                        </span>
+                        <span>Max</span>
+                      </div>
+                    </div>
+
+                    {/* Pull action button */}
+                    <button
+                      onClick={handlePullRod}
+                      className="w-full py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[10px] rounded border border-emerald-350 active:scale-95 transition-all uppercase tracking-wider cursor-pointer"
+                    >
+                      🎣 TARIK SEKARANG!
+                    </button>
+                    <p className="text-[6.5px] text-slate-500 font-bold mt-1">Petunjuk: Klik atau Tekan [TOMBOL SPASI / ENTER]</p>
+                  </div>
+                )}
+
+                {fishingState === 'caught' && (
+                  <div className="flex-1 flex flex-col items-center justify-between text-center p-1">
+                    <div className="text-emerald-400 animate-bounce p-1">
+                      <span className="text-xl">✨🏆✨</span>
+                    </div>
+                    <div className="bg-[#0f172a] border border-slate-900 p-1.5 rounded w-full flex flex-col items-center">
+                      <p className="text-[7.5px] text-teal-400 font-bold uppercase tracking-wider">Tangkapan Berhasil!</p>
+                      <h4 className="text-[10px] font-black text-yellow-300 mt-0.5">
+                        {FISH_TYPES[targetFishId]?.name}
+                      </h4>
+                      <p className="text-[8px] text-slate-300 mt-1 leading-normal italic px-1.5">
+                        "{FISH_TYPES[targetFishId]?.description}"
+                      </p>
+                      <div className="grid grid-cols-2 gap-2 w-full border-t border-slate-900 mt-1.5 pt-1 text-[8px]">
+                        <div className="text-left font-semibold text-slate-400">
+                          Bobot: <b className="text-white">{FISH_TYPES[targetFishId]?.weight}</b>
+                        </div>
+                        <div className="text-right font-semibold text-slate-400">
+                          Bonus: <b className="text-yellow-400">+{FISH_TYPES[targetFishId]?.sellPrice} Koin</b>
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => setFishingState('idle')}
+                      className="w-full py-1 bg-sky-500 hover:bg-sky-400 text-slate-950 font-black text-[10px] rounded active:scale-95 transition-transform uppercase cursor-pointer mt-1"
+                    >
+                      Simpan di Kantong
+                    </button>
+                  </div>
+                )}
+
+                {fishingState === 'escaped' && (
+                  <div className="flex-1 flex flex-col items-center justify-between text-center p-1">
+                    <span className="text-xl animate-spin">🍂💨</span>
+                    <div>
+                      <h4 className="text-[10px] font-black text-red-400 uppercase tracking-wide">Ikan Meloloskan Diri!</h4>
+                      <p className="text-[8px] text-slate-400 max-w-[150px] mx-auto mt-1 leading-normal">Tali senarmu kendor. Ikan meronta kuat dan melepaskan kail.</p>
+                    </div>
+                    <button
+                      onClick={() => setFishingState('idle')}
+                      className="w-full py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-[9px] rounded active:scale-95 transition-transform uppercase cursor-pointer"
+                    >
+                      Tutup
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* NPC CHARACTERS RENDERED ON WEALTHY SIDE MAP */}
             {/* 1. Pak Budi (Seed merchant near upper right) */}
@@ -1937,6 +2445,42 @@ export default function App() {
                               className="text-[10px] font-bold bg-yellow-500 hover:bg-yellow-400 text-slate-900 border border-yellow-600 px-1.5 py-0.5 rounded transition-colors"
                             >
                               Jual
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Fish caught storage */}
+                <span className="text-[10px] font-bold text-sky-400 uppercase tracking-wider mt-3 flex items-center gap-1">
+                  <span>&middot; Hasil Memancing (Danau):</span>
+                </span>
+                <div className="flex-1 overflow-y-auto max-h-[165px] flex flex-col gap-1.5 pr-1">
+                  {Object.keys(fishInventory).map((id) => {
+                    const val = fishInventory[id] || 0;
+                    const info = FISH_TYPES[id as keyof typeof FISH_TYPES];
+                    if (!info) return null;
+                    return (
+                      <div key={id} className="bg-[#0f172a] border border-slate-700 p-2 rounded-lg flex items-center justify-between gap-2 text-xs">
+                        <div className="flex items-center gap-2">
+                          <span className="text-base" style={{ color: info.color }}>
+                            {id === 'water_dragon' ? '🐉' : id === 'golden_koi' ? '🐠' : id === 'old_boot' ? '🥾' : '🐟'}
+                          </span>
+                          <div>
+                            <p className="text-slate-200 font-bold text-[10px]">{info.name.split(' (')[0]}</p>
+                            <p className="text-[8px] text-slate-400">Harga Jual: {info.sellPrice} Koin &middot; Berat: {info.weight}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="bg-sky-950 text-sky-400 font-bold px-1.5 py-0.5 rounded text-[9px]">{val}x</span>
+                          {val > 0 && (
+                            <button 
+                              onClick={() => sellFish(id)}
+                              className="text-[9px] font-black bg-yellow-500 hover:bg-yellow-400 text-slate-900 border border-yellow-600 px-1.5 py-0.5 rounded transition-all cursor-pointer"
+                            >
+                              JUAL
                             </button>
                           )}
                         </div>
