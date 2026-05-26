@@ -1,0 +1,6 @@
+{
+  "name": "Pixel Zen Garden",
+  "description": "Sebuah game santai dengan grafik pixel art, tanaman interaktif, kolam pemancingan tenang, pengatur suara latar alam, dan siklus siang-malam yang damai.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
